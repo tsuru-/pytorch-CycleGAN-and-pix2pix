@@ -102,7 +102,7 @@ def define_D(input_nc, ndf, netD,
     if netD == 'basic':
         net = NLayerDiscriminator(input_nc, ndf, n_layers=3, norm_layer=norm_layer, use_sigmoid=use_sigmoid)
     elif netD == 'light_basic':
-        net = LightResnetGenerator(input_nc,ndf,n_layers = 3, norm_layer=norm_layer,use_sigmoid=use_sigmoid)
+        net = LightNLayerDiscriminator(input_nc,ndf,n_layers = 3)
     elif netD == 'n_layers':
         net = NLayerDiscriminator(input_nc, ndf, n_layers_D, norm_layer=norm_layer, use_sigmoid=use_sigmoid)
     elif netD == 'pixel':
@@ -511,47 +511,40 @@ class NLayerDiscriminator(nn.Module):
 
     # Light Discriminator implementation
 
-    class LightNLayerDiscriminator(nn.Module):
-        def __init__(self, input_nc, ndf=64, n_layers=3):
-            super(NLayerDiscriminator, self).__init__()
+class LightNLayerDiscriminator(nn.Module):
+    def __init__(self, input_nc, ndf=64, n_layers=3):
+        super(LightNLayerDiscriminator, self).__init__()
 
-            kw = 4
-            padw = 1
-            self.ndf // 2
+        kw = 4
+        padw = 1
+        ndf // 2
 
-            #Concatenation layer
+        #Concatenation layer
 
-            sequence = [
-                ConvBlock(input_nc, ndf, kernel_size=kw, stride=2, padding=padw, bn=False, act_type='leakyrelu')
-            ]
+        sequence = [ConvBlock(input_nc, ndf, kernel=kw, stride=2, pad=padw, bn=False, act_type='leakyrelu')]
 
-            #Encoding
-            
-            nf_mult = 1
-            nf_mult_prev = 1
-            for n in range(1, n_layers):
-                nf_mult_prev = nf_mult
-                nf_mult = min(2 ** n, 8)
-                sequence += [
-                    ConvBlock(ndf * nf_mult_prev, ndf * nf_mult,
-                              kernel_size=kw, stride=2, padding=padw,bn=True, act_type='leakyrelu')
-                    ]
-
+        #Encoding
+        
+        nf_mult = 1
+        nf_mult_prev = 1
+        for n in range(1, n_layers):
             nf_mult_prev = nf_mult
-            nf_mult = 2 ** nf_mult
-            sequence += [
-                ConvBlock(ndf * nf_mult_prev, ndf * nf_mult,
-                          kernel_size=kw, stride=2, padding=padw, bn=True, act_type='leakyrelu')
-            ]
+            nf_mult = min(2 ** n, 8)
+            sequence += [ConvBlock(ndf * nf_mult_prev, ndf * nf_mult,kernel=kw, stride=2, pad=padw, bn=True, act_type='leakyrelu')]
 
-            #PatchGan
+        nf_mult_prev = nf_mult
+        nf_mult = 2 ** nf_mult
+        sequence += [ConvBlock(ndf * nf_mult_prev, ndf * nf_mult, kernel=kw, stride=2, pad=padw, bn=True, act_type='leakyrelu')
+        ]
 
-            sequence += [ConvBlock(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw, bn=False, act_type= None)]
+        #PatchGan
 
-            self.model = nn.Sequential(*sequence)
+        sequence += [ConvBlock(ndf * nf_mult, 1, kernel=kw, stride=1, pad=padw, bn=False, act_type= None)]
 
-        def forward(self, input):
-            return self.model(input)
+        self.model = nn.Sequential(*sequence)
+
+    def forward(self, input):
+        return self.model(input)
 
 
 class PixelDiscriminator(nn.Module):
