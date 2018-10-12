@@ -88,9 +88,7 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     elif netG == 'unet_256':
         net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     elif netG == "lightresnet_2blocks":
-        net = LightResnetGenerator(input_nc, output_nc, ngf, use_dropout=use_dropout, n_blocks=2,use_deconvolution=True)
-    elif netG == "lightresnet_2blocks+":
-        net = LightResnetGenerator(input_nc, output_nc, ngf, use_dropout=use_dropout, n_blocks=2,use_deconvolution=False)
+        net = LightResnetGenerator(input_nc, output_nc, ngf, use_dropout=use_dropout, n_blocks=2)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -289,7 +287,7 @@ Only BatchNorm implemented for now (need to readd bias for Instance normalizatio
         2 ConvTransBlocks - 1 ConvBlock
 """
 class LightResnetGenerator(nn.Module):
-    def __init__(self, input_nc, output_nc, ngf=64, use_dropout=False, n_blocks=3, padding_type='reflect',use_deconvolution=False):
+    def __init__(self, input_nc, output_nc, ngf=64, use_dropout=False, n_blocks=3, padding_type='reflect'):
         assert(n_blocks >= 0)
         super(LightResnetGenerator, self).__init__()
         self.input_nc = input_nc #default 3
@@ -299,38 +297,39 @@ class LightResnetGenerator(nn.Module):
         #     use_bias = norm_layer.func == nn.InstanceNorm2d
         # else:
         #     use_bias = norm_layer == nn.InstanceNorm2d
-        model = [nn.Conv2d(input_nc, ngf, kernel_size=7, padding=3,stride=1)]
-        model += [nn.BatchNorm2d(ngf, affine=True)]
-        model += [nn.ReLU()]
+        
+        #
+        # Part 1. Downsample:
+        # (N, 3, 128, 128) -> (N, 32, 128, 128)
+        # (N, 32, 128, 128) -> (N, 64, 64, 64)
+        # (N, 64, 64, 64) -> (N, 128, 32, 32)
+        #
+        model = ConvBlock(input_nc, ngf, kernel=7, stride=1, pad=3, bn=True, act_type='relu')]
+
         n_downsampling = 2
         for i in range(n_downsampling):
             mult = 2**i
-            model += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3,
-                                stride=2, padding=1, bias=use_bias),
-                      nn.BatchNorm2d(ngf * mult * 2,affine=True),
-                      nn.ReLU()]
+            model += ConvBlock(ngf * mult, ngf * mult * 2, kernel = 3, stride=2, pad=1, bn=True, act_type='relu')
 
+        #
+        # Part 2. Res Blocks:
+        # (N, 128, 32, 32) -> (N, 128, 32, 32)
+        # (N, 128, 32, 32) -> (N, 128, 32, 32)
+        #
         mult = 2**n_downsampling
         for i in range(n_blocks):
-            model += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+            model += [ResBlock(ngf * mult,ngf * mult,kernel=3,stride=1,pad=1)]
+        # 
+        # Part 3. Upsample
+        # (N, 128, 32, 32) -> (N, 64, 64, 64)
+        # (N, 64, 64, 64) -> (N, 32, 128, 128)
+        # (N, 32, 128, 128) -> (N, 3, 128, 128)
 
         for i in range(n_downsampling):
             mult = 2**(n_downsampling - i)
-            if use_deconvolution:
-                model += [nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2),
-                             kernel_size=3, stride=2,
-                             padding=1, output_padding=1,
-                             bias=use_bias)]
-            else:
-                model += [nn.Upsample(scale_factor = 2, mode='bilinear',align_corners=True),
-                          nn.ReflectionPad2d(1),
-                          nn.Conv2d(ngf * mult, int(ngf * mult / 2),kernel_size=3, stride=1, padding=0)]
+            model += [ConvTransBlock(ngf * mult, int(ngf * mult / 2), kernel=3, stride=2, pad=1, output_pad=1)]
 
-            model += [norm_layer(int(ngf * mult / 2)),nn.ReLU(True)]
-
-        model += [nn.ReflectionPad2d(3)]
-        model += [nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)]
-        model += [nn.Tanh()]
+        model += [ConvBlock(ngf,output_nv,kernel=7, stride=1, pad=3, bn=False, act_type='tanh')]
 
         self.model = nn.Sequential(*model)
 
