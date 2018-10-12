@@ -87,6 +87,10 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
         net = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     elif netG == 'unet_256':
         net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+    elif netG == "lightresnet_2blocks":
+        net = LightResnetGenerator(input_nc, output_nc, ngf, use_dropout=use_dropout, n_blocks=2,use_deconvolution=True)
+    elif netG == "lightresnet_2blocks+":
+        net = LightResnetGenerator(input_nc, output_nc, ngf, use_dropout=use_dropout, n_blocks=2,use_deconvolution=False)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -138,6 +142,82 @@ class GANLoss(nn.Module):
         target_tensor = self.get_target_tensor(input, target_is_real)
         return self.loss(input, target_tensor)
 
+
+"""
+    < class ConvBlock >
+    
+    It consists of Convolution - Norm - Activation
+"""
+class ConvBlock(nn.Module):
+    def __init__(self, in_dim, out_dim, kernel=3, stride=1, pad=0, bn=True, act_type='relu'):
+        super(ConvBlock, self).__init__()
+        
+        layer_list = []
+        layer_list += [nn.Conv2d(in_dim, out_dim, kernel_size=kernel, stride=stride, padding=pad)]
+        
+        # Make BatchNorm layer
+        if bn == True:
+            layer_list += [nn.BatchNorm2d(out_dim, affine=True)]
+        
+        # Make activation layer
+        if act_type == 'relu':
+            layer_list += [nn.ReLU()]
+        elif act_type == 'leakyrelu':
+            layer_list += [nn.LeakyReLU(negative_slope=0.01)]
+        elif act_type == 'tanh':
+            layer_list += [nn.Tanh()]
+        elif act_type == None:
+            pass
+        
+        self.conv_block = nn.Sequential(*layer_list)
+        
+    def forward(self, x):
+        out = self.conv_block(x)
+        return out
+
+    
+"""
+    < class ResBlock v2 > 
+
+    It consists of two ConvBlocks and uses Identity Mapping(resnet).
+"""
+class ResBlock(nn.Module):
+    def __init__(self, in_dim, out_dim, kernel=3, stride=1, pad=1):            
+        super(ResBlock, self).__init__()
+        
+        conv_block_1 = ConvBlock(in_dim, out_dim, kernel=kernel, stride=stride, pad=pad, 
+                                 bn=True, act_type='relu')
+        conv_block_2 = ConvBlock(in_dim, out_dim, kernel=kernel, stride=stride, pad=pad,
+                                 bn=True, act_type=None)
+        
+        self.res_block = nn.Sequential(conv_block_1, conv_block_2)
+    
+    def forward(self, x):
+        out = x + self.res_block(x)
+        return out
+        
+        
+"""
+    < class ConvTransBlock >
+
+    It consists of Transpose Convolution - Batch Norm - ReLU
+"""
+class ConvTransBlock(nn.Module):
+    def __init__(self, in_dim, out_dim, kernel=3, stride=2, pad=1, output_pad=1):
+        super(ConvTransBlock, self).__init__()
+
+        conv_trans = nn.ConvTranspose2d(in_dim, out_dim, kernel_size=kernel, stride=stride, 
+                                        padding=pad, output_padding=output_pad)
+        norm = nn.BatchNorm2d(out_dim, affine=True)
+        relu = nn.ReLU()
+        
+        self.deconv_block = nn.Sequential(conv_trans, norm, relu)
+            
+    def forward(self, x):
+        out = self.deconv_block(x)
+        return out
+    
+    
 
 # Defines the generator that consists of Resnet blocks between a few
 # downsampling/upsampling operations.
@@ -196,8 +276,69 @@ class ResnetGenerator(nn.Module):
     def forward(self, input):
         return self.model(input)
 
+"""
+LightResnet
+Only BatchNorm implemented for now (need to readd bias for Instance normalization)
+    Part 1. Downsalmple
+        3 ConvBlocks
+        
+    Part 2. Res Blocks
+        2 ResBlocks 
+        
+    Part 3. Upsample
+        2 ConvTransBlocks - 1 ConvBlock
+"""
+class LightResnetGenerator(nn.Module):
+    def __init__(self, input_nc, output_nc, ngf=64, use_dropout=False, n_blocks=3, padding_type='reflect',use_deconvolution=False):
+        assert(n_blocks >= 0)
+        super(LightResnetGenerator, self).__init__()
+        self.input_nc = input_nc #default 3
+        self.output_nc = output_nc #default 3
+        self.ngf = ngf // 2 #default 64
+        # if type(norm_layer) == functools.partial:
+        #     use_bias = norm_layer.func == nn.InstanceNorm2d
+        # else:
+        #     use_bias = norm_layer == nn.InstanceNorm2d
+        model = [nn.Conv2d(input_nc, ngf, kernel_size=7, padding=3,stride=1)]
+        model += [nn.BatchNorm2d(ngf, affine=True)]
+        model += [nn.ReLU()]
+        n_downsampling = 2
+        for i in range(n_downsampling):
+            mult = 2**i
+            model += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3,
+                                stride=2, padding=1, bias=use_bias),
+                      nn.BatchNorm2d(ngf * mult * 2,affine=True),
+                      nn.ReLU()]
 
-# Define a resnet block
+        mult = 2**n_downsampling
+        for i in range(n_blocks):
+            model += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+
+        for i in range(n_downsampling):
+            mult = 2**(n_downsampling - i)
+            if use_deconvolution:
+                model += [nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2),
+                             kernel_size=3, stride=2,
+                             padding=1, output_padding=1,
+                             bias=use_bias)]
+            else:
+                model += [nn.Upsample(scale_factor = 2, mode='bilinear',align_corners=True),
+                          nn.ReflectionPad2d(1),
+                          nn.Conv2d(ngf * mult, int(ngf * mult / 2),kernel_size=3, stride=1, padding=0)]
+
+            model += [norm_layer(int(ngf * mult / 2)),nn.ReLU(True)]
+
+        model += [nn.ReflectionPad2d(3)]
+        model += [nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)]
+        model += [nn.Tanh()]
+
+        self.model = nn.Sequential(*model)
+
+    def forward(self, input):
+        return self.model(input)
+
+
+# Define a resnet block v1
 class ResnetBlock(nn.Module):
     def __init__(self, dim, padding_type, norm_layer, use_dropout, use_bias):
         super(ResnetBlock, self).__init__()
