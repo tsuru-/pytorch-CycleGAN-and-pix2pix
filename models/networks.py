@@ -306,12 +306,12 @@ class LightResnetGenerator(nn.Module):
         # (N, 32, 128, 128) -> (N, 64, 64, 64)
         # (N, 64, 64, 64) -> (N, 128, 32, 32)
         #
-        model = ConvBlock(input_nc, ngf, kernel=7, stride=1, pad=3, bn=True, act_type='relu')]
+        model = [ConvBlock(input_nc, ngf, kernel=7, stride=1, pad=3, bn=True, act_type='relu')]
 
         n_downsampling = 2
         for i in range(n_downsampling):
             mult = 2**i
-            model += ConvBlock(ngf * mult, ngf * mult * 2, kernel = 3, stride=2, pad=1, bn=True, act_type='relu')
+            model += [ConvBlock(ngf * mult, ngf * mult * 2, kernel = 3, stride=2, pad=1, bn=True, act_type='relu')]
 
         #
         # Part 2. Res Blocks:
@@ -331,7 +331,7 @@ class LightResnetGenerator(nn.Module):
             mult = 2**(n_downsampling - i)
             model += [ConvTransBlock(ngf * mult, int(ngf * mult / 2), kernel=3, stride=2, pad=1, output_pad=1)]
 
-        model += [ConvBlock(ngf,output_nv,kernel=7, stride=1, pad=3, bn=False, act_type='tanh')]
+        model += [ConvBlock(ngf,output_nc,kernel=7, stride=1, pad=3, bn=False, act_type='tanh')]
 
         self.model = nn.Sequential(*model)
 
