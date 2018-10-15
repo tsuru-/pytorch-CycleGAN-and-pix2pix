@@ -46,7 +46,7 @@ def get_transform(opt):
         transform_list.append(transforms.RandomHorizontalFlip())
     
     if opt.isTrain and not opt.no_rot:
-        transform_list.append(transforms.RandomRotation(20,resample=Image.BICUBIC))
+        transform_list.append(transforms.RandomRotation(10,resample=Image.BICUBIC))
 
 
     transform_list += [transforms.ToTensor(),
